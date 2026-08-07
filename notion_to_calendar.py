@@ -66,82 +66,48 @@ DEFAULT_COLOR = "8"  # Graphite - 회색 (기타/매칭 안 되는 과목)
 # 에러도 조용히 삼키지 않고 로그에 남기도록 했으니, 그래도 색이
 # 안 먹으면 Actions 로그에서 "get_subject" 관련 출력을 확인해
 # 주세요.
+# =====================
+# 과목 가져오기 함수 (relation 직접 조회 방식)
+# =====================
+#
+# 롤업 값은 Notion 쪽에서 API 반영이 지연되는 경우가 있어서,
+# 롤업 대신 "프로젝트 이름" relation을 직접 따라가 연결된
+# 프로젝트 페이지를 조회하고, 거기서 "과목" select 값을
+# 바로 가져오도록 변경했습니다.
 
 def get_subject(props):
 
     try:
-        subject_prop = props.get("과목")
+        relation_prop = props.get("프로젝트 이름")
 
-        if not subject_prop:
-            print("get_subject: '과목' 속성을 찾을 수 없음")
+        if not relation_prop or relation_prop.get("type") != "relation":
+            print("get_subject: '프로젝트 이름' relation을 찾을 수 없음")
             return None
 
-        prop_type = subject_prop.get("type")
+        relation_list = relation_prop.get("relation") or []
 
-        # 롤업(관련 DB의 값을 끌어오는 경우)
-        if prop_type == "rollup":
-            rollup = subject_prop["rollup"]
-
-            if rollup["type"] != "array":
-                return None
-
-            array = rollup["array"]
-
-            if not array:
-                return None
-
-            first = array[0]
-            item_type = first.get("type")
-
-            if item_type == "title":
-                title_list = first.get("title") or []
-                return title_list[0]["plain_text"] if title_list else None
-
-            elif item_type == "select":
-                select_value = first.get("select")
-                return select_value["name"] if select_value else None
-
-            elif item_type == "multi_select":
-                multi_list = first.get("multi_select") or []
-                return multi_list[0]["name"] if multi_list else None
-
-            elif item_type == "rich_text":
-                rich_text_list = first.get("rich_text") or []
-                return rich_text_list[0]["plain_text"] if rich_text_list else None
-
-            else:
-                print("get_subject: 처리하지 않은 rollup item type:", item_type)
-                return None
-
-        # "과목"이 select 속성 자체인 경우
-        elif prop_type == "select":
-            select_value = subject_prop.get("select")
-            return select_value["name"] if select_value else None
-
-        # "과목"이 multi_select 속성 자체인 경우 (첫 번째 값만 사용)
-        elif prop_type == "multi_select":
-            multi_list = subject_prop.get("multi_select") or []
-            return multi_list[0]["name"] if multi_list else None
-
-        # "과목"이 텍스트 속성 자체인 경우
-        elif prop_type == "rich_text":
-            rich_text_list = subject_prop.get("rich_text") or []
-            return rich_text_list[0]["plain_text"] if rich_text_list else None
-
-        # "과목"이 타이틀 속성 자체인 경우
-        elif prop_type == "title":
-            title_list = subject_prop.get("title") or []
-            return title_list[0]["plain_text"] if title_list else None
-
-        else:
-            print("get_subject: 처리하지 않은 property type:", prop_type)
+        if not relation_list:
+            print("get_subject: 연결된 프로젝트 없음")
             return None
+
+        project_page_id = relation_list[0]["id"]
+
+        # 연결된 프로젝트 페이지를 직접 조회해서 "과목" select 값을 가져옴
+        project_page = notion.pages.retrieve(page_id=project_page_id)
+
+        subject_prop = project_page["properties"].get("과목")
+
+        if not subject_prop or subject_prop.get("type") != "select":
+            print("get_subject: 프로젝트 페이지에 '과목' select 없음")
+            return None
+
+        select_value = subject_prop.get("select")
+
+        return select_value["name"] if select_value else None
 
     except Exception as e:
         print("get_subject error:", e)
         return None
-
-
 
 # =====================
 # Notion 전체 조회
