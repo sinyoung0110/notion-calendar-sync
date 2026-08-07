@@ -45,8 +45,9 @@ calendar = build(
 SUBJECT_COLOR = {
     "국어": "7",          # Peacock - 하늘색
     "영어": "4",          # Flamingo - 분홍색
+    "한국사": "1",
     "일반 컴퓨터": "5",   # Banana - 노란색
-    "정보보호론": "10"    # Basil - 초록색
+    "정보보호론": "2"    # Basil - 초록색
 }
 
 DEFAULT_COLOR = "8"  # Graphite - 회색 (기타/매칭 안 되는 과목)
@@ -186,7 +187,7 @@ for page in results["results"]:
 
     # 디버그가 필요하면 아래 주석을 풀어서 "과목" 속성의
     # 실제 JSON 구조를 로그로 확인할 수 있습니다.
-    # print("DEBUG 과목 raw:", json.dumps(props.get("과목"), ensure_ascii=False))
+    print("DEBUG 과목 raw:", json.dumps(props.get("과목"), ensure_ascii=False))
 
     color_id = SUBJECT_COLOR.get(
         subject,
