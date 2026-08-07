@@ -43,67 +43,102 @@ calendar = build(
 # =====================
 
 SUBJECT_COLOR = {
-    "국어": "9",          # 파랑/하늘색
-    "영어": "4",          # 분홍/빨강
-    "일반 컴퓨터": "5",   # 노랑
-    "정보보호론": "10"    # 초록
+    "국어": "7",          # Peacock - 하늘색
+    "영어": "4",          # Flamingo - 분홍색
+    "일반 컴퓨터": "5",   # Banana - 노란색
+    "정보보호론": "10"    # Basil - 초록색
 }
+
+DEFAULT_COLOR = "8"  # Graphite - 회색 (기타/매칭 안 되는 과목)
 
 
 # =====================
 # 과목 가져오기 함수
 # =====================
 #
-# 기존 코드는 롤업 배열의 첫 항목이 항상 "title" 타입이라고
-# 가정하고 있었는데, 실제 관련 DB의 "과목" 속성이 select나
-# rich_text 등 다른 타입이면 이 조건에 걸리지 않아서 항상 None을
-# 반환하고, 결과적으로 색상이 항상 기본값("1")으로만 적용됐을
-# 가능성이 큽니다.
+# "과목" 속성이 롤업(rollup)일 수도 있고, 관련 DB 구조에 따라
+# select / multi_select / rich_text / title 속성 자체일 수도
+# 있어서, 속성의 실제 type을 먼저 확인한 뒤 그에 맞게 값을
+# 꺼내오도록 만들었습니다. 이렇게 하면 "과목"이 어떤 형태로
+# 설정돼 있어도 대부분 잡아낼 수 있습니다.
 #
-# 아래처럼 실제 타입(title / select / rich_text)을 모두 처리하도록
-# 수정했고, 에러도 조용히 삼키지 않고 로그에 남기도록 했습니다.
-# 만약 이래도 색상이 안 먹으면, 아래 DEBUG 프린트로 실제 구조를
-# 확인해서 타입을 하나 더 추가해주면 됩니다.
+# 에러도 조용히 삼키지 않고 로그에 남기도록 했으니, 그래도 색이
+# 안 먹으면 Actions 로그에서 "get_subject" 관련 출력을 확인해
+# 주세요.
 
 def get_subject(props):
 
     try:
-        rollup = props["과목"]["rollup"]
+        subject_prop = props.get("과목")
 
-        if rollup["type"] != "array":
+        if not subject_prop:
+            print("get_subject: '과목' 속성을 찾을 수 없음")
             return None
 
-        array = rollup["array"]
+        prop_type = subject_prop.get("type")
 
-        if not array:
-            return None
+        # 롤업(관련 DB의 값을 끌어오는 경우)
+        if prop_type == "rollup":
+            rollup = subject_prop["rollup"]
 
-        first = array[0]
+            if rollup["type"] != "array":
+                return None
 
-        item_type = first.get("type")
+            array = rollup["array"]
 
-        if item_type == "title":
-            title_list = first.get("title") or []
-            if title_list:
-                return title_list[0]["plain_text"]
+            if not array:
+                return None
 
-        elif item_type == "select":
-            select_value = first.get("select")
-            if select_value:
-                return select_value["name"]
+            first = array[0]
+            item_type = first.get("type")
 
-        elif item_type == "rich_text":
-            rich_text_list = first.get("rich_text") or []
-            if rich_text_list:
-                return rich_text_list[0]["plain_text"]
+            if item_type == "title":
+                title_list = first.get("title") or []
+                return title_list[0]["plain_text"] if title_list else None
+
+            elif item_type == "select":
+                select_value = first.get("select")
+                return select_value["name"] if select_value else None
+
+            elif item_type == "multi_select":
+                multi_list = first.get("multi_select") or []
+                return multi_list[0]["name"] if multi_list else None
+
+            elif item_type == "rich_text":
+                rich_text_list = first.get("rich_text") or []
+                return rich_text_list[0]["plain_text"] if rich_text_list else None
+
+            else:
+                print("get_subject: 처리하지 않은 rollup item type:", item_type)
+                return None
+
+        # "과목"이 select 속성 자체인 경우
+        elif prop_type == "select":
+            select_value = subject_prop.get("select")
+            return select_value["name"] if select_value else None
+
+        # "과목"이 multi_select 속성 자체인 경우 (첫 번째 값만 사용)
+        elif prop_type == "multi_select":
+            multi_list = subject_prop.get("multi_select") or []
+            return multi_list[0]["name"] if multi_list else None
+
+        # "과목"이 텍스트 속성 자체인 경우
+        elif prop_type == "rich_text":
+            rich_text_list = subject_prop.get("rich_text") or []
+            return rich_text_list[0]["plain_text"] if rich_text_list else None
+
+        # "과목"이 타이틀 속성 자체인 경우
+        elif prop_type == "title":
+            title_list = subject_prop.get("title") or []
+            return title_list[0]["plain_text"] if title_list else None
 
         else:
-            print("get_subject: 처리하지 않은 rollup item type:", item_type)
+            print("get_subject: 처리하지 않은 property type:", prop_type)
+            return None
 
     except Exception as e:
         print("get_subject error:", e)
-
-    return None
+        return None
 
 
 
@@ -145,13 +180,17 @@ for page in results["results"]:
 
     subject = get_subject(props)
 
+    # 앞뒤 공백 차이로 매칭이 안 되는 경우를 막기 위해 strip 처리
+    if subject:
+        subject = subject.strip()
+
     # 디버그가 필요하면 아래 주석을 풀어서 "과목" 속성의
     # 실제 JSON 구조를 로그로 확인할 수 있습니다.
     # print("DEBUG 과목 raw:", json.dumps(props.get("과목"), ensure_ascii=False))
 
     color_id = SUBJECT_COLOR.get(
         subject,
-        "1"
+        DEFAULT_COLOR
     )
 
     print("과목:", subject, "색상:", color_id)
