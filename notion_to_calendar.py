@@ -47,33 +47,29 @@ SUBJECT_COLOR = {
     "영어": "4",          # Flamingo - 분홍색
     "한국사": "1",
     "일반 컴퓨터": "5",   # Banana - 노란색
-    "정보보호론": "2"    # Basil - 초록색
+    "정보보호론": "2"     # Basil - 초록색
 }
 
 DEFAULT_COLOR = "8"  # Graphite - 회색 (기타/매칭 안 되는 과목)
 
 
-# =====================
-# 과목 가져오기 함수
-# =====================
-#
-# "과목" 속성이 롤업(rollup)일 수도 있고, 관련 DB 구조에 따라
-# select / multi_select / rich_text / title 속성 자체일 수도
-# 있어서, 속성의 실제 type을 먼저 확인한 뒤 그에 맞게 값을
-# 꺼내오도록 만들었습니다. 이렇게 하면 "과목"이 어떤 형태로
-# 설정돼 있어도 대부분 잡아낼 수 있습니다.
-#
-# 에러도 조용히 삼키지 않고 로그에 남기도록 했으니, 그래도 색이
-# 안 먹으면 Actions 로그에서 "get_subject" 관련 출력을 확인해
-# 주세요.
+# 프로젝트 페이지를 반복해서 다시 조회하지 않도록 캐싱
+# (같은 프로젝트에 연결된 ToDo가 여러 개면 API 호출을 아낄 수 있음)
+_project_subject_cache = {}
+
+
 # =====================
 # 과목 가져오기 함수 (relation 직접 조회 방식)
 # =====================
 #
-# 롤업 값은 Notion 쪽에서 API 반영이 지연되는 경우가 있어서,
-# 롤업 대신 "프로젝트 이름" relation을 직접 따라가 연결된
-# 프로젝트 페이지를 조회하고, 거기서 "과목" select 값을
-# 바로 가져오도록 변경했습니다.
+# "과목" 롤업 값은 Notion 쪽에서 API 반영이 지연되는 경우가 있어서
+# (relation을 새로 연결한 직후 롤업 캐시가 늦게 갱신되는 케이스),
+# 롤업을 거치지 않고 "프로젝트 이름" relation을 직접 따라가
+# 연결된 프로젝트 페이지를 조회한 뒤, 그 페이지의 "과목" select
+# 값을 바로 읽어오는 방식으로 변경했습니다.
+#
+# 이렇게 하면 항상 최신 값을 가져오고, Notion DB 구조를 새로
+# 만들 필요 없이 기존 "프로젝트 이름" relation만 그대로 씁니다.
 
 def get_subject(props):
 
@@ -81,7 +77,7 @@ def get_subject(props):
         relation_prop = props.get("프로젝트 이름")
 
         if not relation_prop or relation_prop.get("type") != "relation":
-            print("get_subject: '프로젝트 이름' relation을 찾을 수 없음")
+            print("get_subject: '프로젝트 이름' relation 속성을 찾을 수 없음")
             return None
 
         relation_list = relation_prop.get("relation") or []
@@ -90,24 +86,53 @@ def get_subject(props):
             print("get_subject: 연결된 프로젝트 없음")
             return None
 
+        # 여러 프로젝트가 연결돼 있어도 첫 번째 것만 사용
         project_page_id = relation_list[0]["id"]
+
+        # 같은 프로젝트를 이미 조회했다면 캐시에서 바로 반환
+        if project_page_id in _project_subject_cache:
+            return _project_subject_cache[project_page_id]
 
         # 연결된 프로젝트 페이지를 직접 조회해서 "과목" select 값을 가져옴
         project_page = notion.pages.retrieve(page_id=project_page_id)
 
         subject_prop = project_page["properties"].get("과목")
 
-        if not subject_prop or subject_prop.get("type") != "select":
-            print("get_subject: 프로젝트 페이지에 '과목' select 없음")
+        if not subject_prop:
+            print("get_subject: 프로젝트 페이지에 '과목'속성이 없음")
+            _project_subject_cache[project_page_id] = None
             return None
 
-        select_value = subject_prop.get("select")
+        prop_type = subject_prop.get("type")
 
-        return select_value["name"] if select_value else None
+        if prop_type == "select":
+            select_value = subject_prop.get("select")
+            subject = select_value["name"] if select_value else None
+
+        elif prop_type == "multi_select":
+            multi_list = subject_prop.get("multi_select") or []
+            subject = multi_list[0]["name"] if multi_list else None
+
+        elif prop_type == "rich_text":
+            rich_text_list = subject_prop.get("rich_text") or []
+            subject = rich_text_list[0]["plain_text"] if rich_text_list else None
+
+        elif prop_type == "title":
+            title_list = subject_prop.get("title") or []
+            subject = title_list[0]["plain_text"] if title_list else None
+
+        else:
+            print("get_subject: 처리하지 않은 프로젝트 '과목' property type:", prop_type)
+            subject = None
+
+        _project_subject_cache[project_page_id] = subject
+        return subject
 
     except Exception as e:
         print("get_subject error:", e)
         return None
+
+
 
 # =====================
 # Notion 전체 조회
@@ -151,10 +176,6 @@ for page in results["results"]:
     if subject:
         subject = subject.strip()
 
-    # 디버그가 필요하면 아래 주석을 풀어서 "과목" 속성의
-    # 실제 JSON 구조를 로그로 확인할 수 있습니다.
-    print("DEBUG 과목 raw:", json.dumps(props.get("과목"), ensure_ascii=False))
-
     color_id = SUBJECT_COLOR.get(
         subject,
         DEFAULT_COLOR
@@ -179,11 +200,6 @@ for page in results["results"]:
     start = formula_date.get("start")
     end = formula_date.get("end")
 
-    # 시작 시간만 있고 종료 시간이 없는 경우(단일 날짜 등)도
-    # Google Calendar API는 end.dateTime을 요구하기 때문에
-    # 여기서 같이 걸러줘야 합니다. 그냥 무시하고 넘어가는 게
-    # 맞다면 이대로, 종료 시간을 자동으로 채우고 싶다면 이
-    # 아래에서 end = start 등으로 보정해도 됩니다.
     if not start or not end:
         print("시작/종료 시간 불완전:", title)
         count_skip += 1
