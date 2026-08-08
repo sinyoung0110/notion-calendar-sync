@@ -76,6 +76,10 @@ def get_subject(props):
     try:
         # 디버그: "프로젝트 이름" 속성의 실제 원본 구조 확인
         print("DEBUG 프로젝트 이름 raw:", json.dumps(props.get("프로젝트 이름"), ensure_ascii=False))
+        title = title_data[0]["plain_text"]
+
+        print("DEBUG 페이지 URL:", page.get("url"))
+        print("DEBUG 페이지 ID:", page.get("id"))
 
         relation_prop = props.get("프로젝트 이름")
 
