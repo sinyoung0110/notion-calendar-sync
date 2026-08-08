@@ -74,6 +74,9 @@ _project_subject_cache = {}
 def get_subject(props):
 
     try:
+        # 디버그: "프로젝트 이름" 속성의 실제 원본 구조 확인
+        print("DEBUG 프로젝트 이름 raw:", json.dumps(props.get("프로젝트 이름"), ensure_ascii=False))
+
         relation_prop = props.get("프로젝트 이름")
 
         if not relation_prop or relation_prop.get("type") != "relation":
