@@ -1,8 +1,11 @@
 from notion_client import Client
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 import os
 import json
+import time
+import random
 
 
 # =====================
@@ -59,6 +62,40 @@ _project_subject_cache = {}
 
 
 # =====================
+# Google API 호출용 재시도 헬퍼
+# =====================
+#
+# Calendar API를 짧은 시간에 여러 번 연달아 호출하면
+# "Rate Limit Exceeded" (403/429) 에러가 날 수 있습니다.
+# 이 헬퍼는 그런 경우 자동으로 잠깐 기다렸다가 재시도합니다.
+
+def call_with_backoff(request_func, max_retries=5, base_delay=1.0):
+    for attempt in range(max_retries):
+        try:
+            return request_func()
+        except HttpError as e:
+            status = e.resp.status if hasattr(e, "resp") else None
+            reason = str(e)
+
+            is_rate_limit = status in (403, 429) and (
+                "rateLimitExceeded" in reason
+                or "userRateLimitExceeded" in reason
+                or "Rate Limit Exceeded" in reason
+            )
+
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                print(f"  -> Rate limit 감지, {wait:.1f}초 대기 후 재시도 ({attempt + 1}/{max_retries})")
+                time.sleep(wait)
+                continue
+
+            # rate limit이 아니거나, 재시도 다 썼으면 그대로 에러 발생시킴
+            raise
+
+    raise RuntimeError("최대 재시도 횟수를 초과했습니다.")
+
+
+# =====================
 # 과목 가져오기 함수 (relation 직접 조회 방식)
 # =====================
 #
@@ -74,23 +111,14 @@ _project_subject_cache = {}
 def get_subject(props):
 
     try:
-        # 디버그: "프로젝트 이름" 속성의 실제 원본 구조 확인
-        print("DEBUG 프로젝트 이름 raw:", json.dumps(props.get("프로젝트 이름"), ensure_ascii=False))
-        title = title_data[0]["plain_text"]
-
-        print("DEBUG 페이지 URL:", page.get("url"))
-        print("DEBUG 페이지 ID:", page.get("id"))
-
         relation_prop = props.get("프로젝트 이름")
 
         if not relation_prop or relation_prop.get("type") != "relation":
-            print("get_subject: '프로젝트 이름' relation 속성을 찾을 수 없음")
             return None
 
         relation_list = relation_prop.get("relation") or []
 
         if not relation_list:
-            print("get_subject: 연결된 프로젝트 없음")
             return None
 
         # 여러 프로젝트가 연결돼 있어도 첫 번째 것만 사용
@@ -106,7 +134,6 @@ def get_subject(props):
         subject_prop = project_page["properties"].get("과목")
 
         if not subject_prop:
-            print("get_subject: 프로젝트 페이지에 '과목'속성이 없음")
             _project_subject_cache[project_page_id] = None
             return None
 
@@ -140,7 +167,6 @@ def get_subject(props):
         return None
 
 
-
 # =====================
 # Notion 전체 조회
 # =====================
@@ -153,153 +179,153 @@ results = notion.data_sources.query(
 count_create = 0
 count_update = 0
 count_skip = 0
+count_error = 0
 
 
 for page in results["results"]:
 
     props = page["properties"]
+    title = None
+
+    try:
+
+        # =====================
+        # 제목
+        # =====================
+
+        title_data = props["ToDo"]["title"]
+
+        if not title_data:
+            continue
+
+        title = title_data[0]["plain_text"]
 
 
-    # =====================
-    # 제목
-    # =====================
+        # =====================
+        # 과목 색상
+        # =====================
 
-    title_data = props["ToDo"]["title"]
+        subject = get_subject(props)
 
-    if not title_data:
-        continue
+        # 앞뒤 공백 차이로 매칭이 안 되는 경우를 막기 위해 strip 처리
+        if subject:
+            subject = subject.strip()
 
-    title = title_data[0]["plain_text"]
-
-
-
-    # =====================
-    # 과목 색상
-    # =====================
-
-    subject = get_subject(props)
-
-    # 앞뒤 공백 차이로 매칭이 안 되는 경우를 막기 위해 strip 처리
-    if subject:
-        subject = subject.strip()
-
-    color_id = SUBJECT_COLOR.get(
-        subject,
-        DEFAULT_COLOR
-    )
-
-    print("과목:", subject, "색상:", color_id)
-
-
-
-    # =====================
-    # 시간 확인
-    # =====================
-
-    formula_date = props["시작~종료"]["formula"]["date"]
-
-    if not formula_date:
-        print("시간 없음:", title)
-        count_skip += 1
-        continue
-
-
-    start = formula_date.get("start")
-    end = formula_date.get("end")
-
-    if not start or not end:
-        print("시작/종료 시간 불완전:", title)
-        count_skip += 1
-        continue
-
-
-
-    # =====================
-    # Google Event ID 확인
-    # =====================
-
-    event_id_data = props["Google Event ID"]["rich_text"]
-
-
-
-    event = {
-        "summary": title,
-        "colorId": color_id,
-        "start": {
-            "dateTime": start,
-            "timeZone": "Asia/Seoul"
-        },
-        "end": {
-            "dateTime": end,
-            "timeZone": "Asia/Seoul"
-        }
-    }
-
-
-
-    # =====================
-    # 기존 일정 수정
-    # =====================
-
-    if event_id_data:
-
-        event_id = event_id_data[0]["plain_text"]
-
-        print("수정:", title)
-
-        calendar.events().update(
-            calendarId="primary",
-            eventId=event_id,
-            body=event
-        ).execute()
-
-
-        count_update += 1
-
-
-
-    # =====================
-    # 신규 생성
-    # =====================
-
-    else:
-
-        print("생성:", title)
-
-
-        created = calendar.events().insert(
-            calendarId="primary",
-            body=event
-        ).execute()
-
-
-        event_id = created["id"]
-
-
-        notion.pages.update(
-            page_id=page["id"],
-            properties={
-                "Google Event ID": {
-                    "rich_text": [
-                        {
-                            "text": {
-                                "content": event_id
-                            }
-                        }
-                    ]
-                }
-            }
+        color_id = SUBJECT_COLOR.get(
+            subject,
+            DEFAULT_COLOR
         )
 
 
-        print("ID 저장:", event_id)
+        # =====================
+        # 시간 확인
+        # =====================
 
-        count_create += 1
+        formula_date = props["시작~종료"]["formula"]["date"]
 
+        if not formula_date:
+            print("시간 없음:", title)
+            count_skip += 1
+            continue
+
+        start = formula_date.get("start")
+        end = formula_date.get("end")
+
+        if not start or not end:
+            print("시작/종료 시간 불완전:", title)
+            count_skip += 1
+            continue
+
+
+        # =====================
+        # Google Event ID 확인
+        # =====================
+
+        event_id_data = props["Google Event ID"]["rich_text"]
+
+        event = {
+            "summary": title,
+            "colorId": color_id,
+            "start": {
+                "dateTime": start,
+                "timeZone": "Asia/Seoul"
+            },
+            "end": {
+                "dateTime": end,
+                "timeZone": "Asia/Seoul"
+            }
+        }
+
+
+        # =====================
+        # 기존 일정 수정
+        # =====================
+
+        if event_id_data:
+
+            event_id = event_id_data[0]["plain_text"]
+
+            print("수정:", title)
+
+            call_with_backoff(lambda: calendar.events().update(
+                calendarId="primary",
+                eventId=event_id,
+                body=event
+            ).execute())
+
+            count_update += 1
+
+
+        # =====================
+        # 신규 생성
+        # =====================
+
+        else:
+
+            print("생성:", title)
+
+            created = call_with_backoff(lambda: calendar.events().insert(
+                calendarId="primary",
+                body=event
+            ).execute())
+
+            event_id = created["id"]
+
+            notion.pages.update(
+                page_id=page["id"],
+                properties={
+                    "Google Event ID": {
+                        "rich_text": [
+                            {
+                                "text": {
+                                    "content": event_id
+                                }
+                            }
+                        ]
+                    }
+                }
+            )
+
+            print("ID 저장:", event_id)
+
+            count_create += 1
+
+        # Calendar API 연속 호출 사이에 약간의 간격을 둬서
+        # Rate Limit에 걸릴 확률 자체를 낮춥니다.
+        time.sleep(0.3)
+
+    except Exception as e:
+        # 어떤 페이지에서 어떤 에러가 났는지 명확히 남기고,
+        # 한 건이 실패해도 전체 스크립트는 계속 진행합니다.
+        print(f"!! 처리 실패 - 제목: {title!r}, 페이지 ID: {page.get('id')}")
+        print(f"   에러: {type(e).__name__}: {e}")
+        count_error += 1
+        continue
 
 
 print("\n================")
 print("생성:", count_create)
 print("수정:", count_update)
 print("건너뜀(시간 없음):", count_skip)
+print("실패:", count_error)
 print("================")
