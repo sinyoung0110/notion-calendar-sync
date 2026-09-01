@@ -6,6 +6,7 @@ import os
 import json
 import time
 import random
+from datetime import datetime, timedelta, timezone
 
 
 # =====================
@@ -17,6 +18,25 @@ NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 notion = Client(auth=NOTION_TOKEN)
 
 data_source_id = "e4f96717-d484-82a5-8212-0719c35b885a"
+
+
+# =====================
+# 처리할 날짜 범위
+# =====================
+# 매번 DB 전체를 훑으면 항목이 쌓일수록 느려지므로,
+# "시작~종료" 값이 이 범위 안에 있는 항목만 조회/동기화합니다.
+# 필요하면 숫자만 조절하세요.
+
+DAYS_BEFORE = 7    # 오늘 기준 며칠 전부터
+DAYS_AFTER = 30    # 오늘 기준 며칠 후까지
+
+KST = timezone(timedelta(hours=9))
+today = datetime.now(KST).date()
+
+range_start = (today - timedelta(days=DAYS_BEFORE)).isoformat()
+range_end = (today + timedelta(days=DAYS_AFTER)).isoformat()
+
+print(f"동기화 범위: {range_start} ~ {range_end}")
 
 
 # =====================
@@ -168,12 +188,51 @@ def get_subject(props):
 
 
 # =====================
-# Notion 전체 조회
+# Notion 조회 (날짜 범위로 필터링 + 페이지네이션)
 # =====================
 
-results = notion.data_sources.query(
-    data_source_id=data_source_id
-)
+date_filter = {
+    "and": [
+        {
+            "property": "시작~종료",
+            "formula": {
+                "date": {
+                    "on_or_after": range_start
+                }
+            }
+        },
+        {
+            "property": "시작~종료",
+            "formula": {
+                "date": {
+                    "on_or_before": range_end
+                }
+            }
+        }
+    ]
+}
+
+all_pages = []
+start_cursor = None
+
+while True:
+    query_kwargs = {
+        "data_source_id": data_source_id,
+        "filter": date_filter
+    }
+    if start_cursor:
+        query_kwargs["start_cursor"] = start_cursor
+
+    results = notion.data_sources.query(**query_kwargs)
+
+    all_pages.extend(results["results"])
+
+    if results.get("has_more"):
+        start_cursor = results.get("next_cursor")
+    else:
+        break
+
+print(f"처리 대상 항목 수: {len(all_pages)}")
 
 
 count_create = 0
@@ -182,7 +241,7 @@ count_skip = 0
 count_error = 0
 
 
-for page in results["results"]:
+for page in all_pages:
 
     props = page["properties"]
     title = None
