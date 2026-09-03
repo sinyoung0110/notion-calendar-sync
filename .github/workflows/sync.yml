@@ -3,10 +3,11 @@ name: Notion Calendar Sync
 on:
   workflow_dispatch:
   schedule:
-    # 매 정시(0분, 5분 등 딱 떨어지는 시각)는 GitHub Actions
-    # 부하가 몰려서 "runner not acquired" 에러가 더 자주 발생합니다.
+    # 매 정시(0분, 30분 등 딱 떨어지는 시각)는 GitHub Actions
+    # 부하가 몰려서 스케줄 실행이 지연/드롭되는 경우가 더 많습니다.
     # 3분 오프셋을 줘서 그 시간대를 살짝 비껴가도록 했습니다.
-    - cron: "3-59/5 * * * *"
+    # (30분마다 실행: 매시 8분, 38분)
+    - cron: "8,38 * * * *"
 
 jobs:
   sync:
